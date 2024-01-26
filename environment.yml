@@ -70,6 +70,6 @@ dependencies:
       - numpy==1.26.3
       - pillow==10.2.0
       - pyparsing==3.1.1
-      - python-graphviz==0.20.1
+      - graphviz==0.20.1
       - sympy==1.12
       - torch==2.1.2
