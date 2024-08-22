@@ -1,3 +1,4 @@
+import random
 import torch
 import torch.nn.functional as F
 
@@ -43,7 +44,6 @@ class NGram:
 
         self.n = n
         self.weights = torch.randn((CHARS * (n - 1), CHARS), requires_grad=True)
-        self.counts: dict[tuple[str, ...], int] = {}
 
     def train(
         self,
@@ -59,7 +59,7 @@ class NGram:
             if len(w) < self.n:
                 continue
             chs = ["."] + list(w) + ["."]
-            for i in range(len(chs) - self.n + 1):  # Changed this line
+            for i in range(len(chs) - self.n + 1):
                 context = chs[i : i + self.n - 1]
                 target = chs[i + self.n - 1]
                 xs.append([stoi[ch] for ch in context])
@@ -94,19 +94,26 @@ class NGram:
             self.weights.data += -learning_rate * self.weights.grad
 
     def forward(self, x: str = "") -> str:
-        ix = 0
-        word = ""
+        context = [0]
 
         for c in x:
+            if len(context) == self.n - 1:
+                break
             if c not in stoi:
                 raise ValueError(f"Character {c} not in stoi")
+            context.append(stoi[c])
 
-            ix = stoi[c]
+        while len(context) < self.n - 1:
+            context.append(random.randint(1, 26))
+
+        word = ""
+        for c in context[1:]:
+            word += itos[c]
 
         while True:
             # Forward pass
             # Neural net input: one-hot encoding
-            xenc = F.one_hot(torch.tensor([ix]), num_classes=CHARS).float()
+            xenc = F.one_hot(torch.tensor(context), num_classes=CHARS).float()
             # Predict log-counts
             logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
             counts = logits.exp()
@@ -114,16 +121,19 @@ class NGram:
             p = counts / counts.sum(1, keepdim=True)
 
             # Sample from the distribution
-            ix = torch.multinomial(p, num_samples=1, replacement=True).item()
-            if ix == 0:
+            context.pop(0)
+            context.append(torch.multinomial(p, num_samples=1, replacement=True).item())
+            if context[-1] == 0:
                 break
 
-            word += itos[ix]
+            word += itos[context[-1]]
 
         return word
 
 
 if __name__ == "__main__":
+    words: list[str] = open("names.txt", "r").read().splitlines()
     ngram = NGram(2)
-    ngram.train(["emma"])
-    print(ngram.forward())
+    ngram.train(words)
+    for _ in range(50):
+        print(ngram.forward())
