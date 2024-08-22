@@ -142,9 +142,8 @@ class NGram:
             xenc = F.one_hot(torch.tensor(context), num_classes=CHARS).float()
             # Predict log-counts
             logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
-            counts = logits.exp()
             # Probabilities for next character
-            p = counts / counts.sum(1, keepdim=True)
+            p = F.softmax(logits, dim=-1)
 
             # Sample from the distribution
             context.pop(0)
@@ -155,3 +154,8 @@ class NGram:
             word += itos[context[-1]]
 
         return word
+
+
+class MLP:
+    def __init__(self, block_size: int = 3):
+        self.block_size = block_size
