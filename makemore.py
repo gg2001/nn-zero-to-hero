@@ -73,14 +73,10 @@ class NGram:
             xenc = F.one_hot(xs, num_classes=CHARS).float()
             # Predict log-counts
             logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
-            counts = logits.exp()
-            # Probabilities for next character
-            probs = counts / counts.sum(dim=1, keepdim=True)
 
             # Negative log likelihood
             loss = (
-                -probs[torch.arange(ys.shape[0]), ys].log().mean()
-                + regularization * (self.weights**2).mean()  # Regularization
+                F.cross_entropy(logits, ys) + regularization * (self.weights**2).mean()
             )
 
             if debug:
@@ -133,7 +129,7 @@ class NGram:
 
 if __name__ == "__main__":
     words: list[str] = open("names.txt", "r").read().splitlines()
-    ngram = NGram(2)
+    ngram = NGram(3)
     ngram.train(words)
     for _ in range(50):
         print(ngram.forward())
