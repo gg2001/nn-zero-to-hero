@@ -37,6 +37,38 @@ itos: dict[int, str] = {i: s for s, i in stoi.items()}
 CHARS = len(stoi)  # 27
 
 
+def load_words(filename: str = "names.txt") -> tuple[list[str], list[str], list[str]]:
+    words: list[str] = open(filename, "r").read().splitlines()
+
+    random.shuffle(words)
+
+    total_words = len(words)
+    train_split = int(0.8 * total_words)
+    dev_split = int(0.9 * total_words)
+
+    train_words = words[:train_split]
+    dev_words = words[train_split:dev_split]
+    test_words = words[dev_split:]
+
+    return train_words, dev_words, test_words
+
+
+def parse_words(words: list[str], n: int) -> tuple[torch.Tensor, torch.Tensor]:
+    xs, ys = [], []
+    for w in words:
+        if len(w) < n:
+            continue
+        chs = ["."] + list(w) + ["."]
+        for i in range(len(chs) - n + 1):
+            context = chs[i : i + n - 1]
+            target = chs[i + n - 1]
+            xs.append([stoi[ch] for ch in context])
+            ys.append(stoi[target])
+    xs = torch.tensor(xs)
+    ys = torch.tensor(ys)
+    return xs, ys
+
+
 class NGram:
     def __init__(self, n: int):
         if n < 2:
@@ -53,19 +85,7 @@ class NGram:
         learning_rate: float = 50,
         debug: bool = True,
     ):
-        # Parse words into sequences of characters
-        xs, ys = [], []
-        for w in words:
-            if len(w) < self.n:
-                continue
-            chs = ["."] + list(w) + ["."]
-            for i in range(len(chs) - self.n + 1):
-                context = chs[i : i + self.n - 1]
-                target = chs[i + self.n - 1]
-                xs.append([stoi[ch] for ch in context])
-                ys.append(stoi[target])
-        xs = torch.tensor(xs)
-        ys = torch.tensor(ys)
+        xs, ys = parse_words(words, self.n)
 
         for i in range(epochs):
             # Forward pass
@@ -74,7 +94,7 @@ class NGram:
             # Predict log-counts
             logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
 
-            # Negative log likelihood
+            # Negative log likelihood + regularization
             loss = (
                 F.cross_entropy(logits, ys) + regularization * (self.weights**2).mean()
             )
@@ -88,6 +108,16 @@ class NGram:
 
             # Update
             self.weights.data += -learning_rate * self.weights.grad
+
+    def evaluate(self, words: list[str]) -> float:
+        xs, ys = parse_words(words, self.n)
+
+        with torch.no_grad():
+            xenc = F.one_hot(xs, num_classes=CHARS).float()
+            logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
+            loss = F.cross_entropy(logits, ys)
+
+        return loss.item()
 
     def forward(self, x: str = "") -> str:
         context = [0]
@@ -125,11 +155,3 @@ class NGram:
             word += itos[context[-1]]
 
         return word
-
-
-if __name__ == "__main__":
-    words: list[str] = open("names.txt", "r").read().splitlines()
-    ngram = NGram(3)
-    ngram.train(words)
-    for _ in range(50):
-        print(ngram.forward())
