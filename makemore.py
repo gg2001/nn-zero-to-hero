@@ -157,12 +157,18 @@ class NGram:
 
 
 class MLP:
-    def __init__(self, sizes: list[int], block_size: int = 3, embedding_dim: int = 10):
+    def __init__(
+        self,
+        sizes: list[int],
+        block_size: int = 3,
+        embedding_dim: int = 10,
+        weight_scale: float = 0.01,
+    ):
         self.block_size = block_size
         self.inputs = block_size * embedding_dim
 
         # C
-        self.embeddings = torch.randn((CHARS, embedding_dim), requires_grad=True)
+        self.embeddings = torch.randn((CHARS, embedding_dim)) * weight_scale
 
         # Hidden layers
         self.weights: list[torch.Tensor] = []
@@ -171,14 +177,16 @@ class MLP:
             inputs = self.inputs if i == 0 else sizes[i - 1]
             neurons = sizes[i]
 
-            self.weights.append(torch.randn((inputs, neurons), requires_grad=True))
-            self.biases.append(torch.randn((neurons), requires_grad=True))
+            self.weights.append(torch.randn((inputs, neurons)) * weight_scale)
+            self.biases.append(torch.randn((neurons)))
 
         # Output layer
-        self.weights.append(torch.randn((sizes[-1], CHARS), requires_grad=True))
-        self.biases.append(torch.randn((CHARS), requires_grad=True))
+        self.weights.append(torch.randn((sizes[-1], CHARS)) * weight_scale)
+        self.biases.append(torch.randn((CHARS)))
 
         self.parameters = [self.embeddings] + self.weights + self.biases
+        for p in self.parameters:
+            p.requires_grad = True
 
     def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         x, y = [], []
@@ -196,35 +204,57 @@ class MLP:
         self,
         words: list[str],
         minibatch_size: int = 32,
+        epochs: int = 40,
+        regularization: float = 0.01,
+        learning_rate: float = 0.1,
         debug: bool = True,
     ):
         x, y = self.parse_words(words)
+        n = x.shape[0]
 
-        for i in range(200000):
-            # Minibatch construct
-            ix = torch.randint(0, x.shape[0], (minibatch_size,))
+        training_losses = []
+        for i in range(epochs):
+            # Shuffle the data
+            permutation = torch.randperm(n)
+            x_shuffled = x[permutation]
+            y_shuffled = y[permutation]
 
-            # Forward pass
-            emb = self.embeddings[x[ix]]  # (minibatch_size, block_size, embedding_dim)
-            logits = torch.tanh(
-                emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
-            )  # (minibatch_size, weights[0].shape[1])
-            for w, b in zip(self.weights[1:], self.biases[1:]):
-                logits = logits @ w + b  # (minibatch_size, w.shape[1])
-            loss = F.cross_entropy(logits, y[ix])
+            for k in range(0, n, minibatch_size):
+                # Create the minibatches
+                x_batch = x_shuffled[k : k + minibatch_size]
+                y_batch = y_shuffled[k : k + minibatch_size]
 
-            if i % 1000 == 0:
+                # Forward pass
+                emb = self.embeddings[
+                    x_batch
+                ]  # (minibatch_size, block_size, embedding_dim)
+                logits = torch.tanh(
+                    emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
+                )  # (minibatch_size, weights[0].shape[1])
+                for w, b in zip(self.weights[1:], self.biases[1:]):
+                    logits = logits @ w + b  # (minibatch_size, w.shape[1])
+                loss = F.cross_entropy(logits, y_batch)
+                # Regularization
+                for w in self.weights:
+                    loss += regularization * (w**2).mean()
+
+                # Backward pass
+                for p in self.parameters:
+                    p.grad = None
+                loss.backward()
+
+                # Update
+                for p in self.parameters:
+                    p.data += -learning_rate * p.grad
+
+            training_losses.append(loss.item())
+            if debug:
                 print(f"Epoch {i} Loss: {loss.item()}")
 
-            # Backward pass
-            for p in self.parameters:
-                p.grad = None
-            loss.backward()
-
-            # Update
-            lr = 0.1 if i < 100000 else 0.01
-            for p in self.parameters:
-                p.data += -lr * p.grad
+            # Reduce the learning rate on each quarter
+            if i > 0 and i % (epochs // 4) == 0:
+                learning_rate /= 10
+                print(f"Learning rate reduced to {learning_rate}")
 
     def evaluate(self, words: list[str]) -> float:
         x, y = self.parse_words(words)
@@ -270,13 +300,3 @@ class MLP:
                 word += itos[ix]
 
         return word
-
-
-if __name__ == "__main__":
-    train_words, dev_words, test_words = load_words()
-    mlp = MLP([20, 10])
-    mlp.train(train_words)
-    for _ in range(50):
-        print(mlp.forward())
-    print(mlp.evaluate(dev_words))
-    print(mlp.evaluate(test_words))
