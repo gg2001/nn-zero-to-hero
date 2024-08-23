@@ -228,11 +228,14 @@ class MLP:
                 emb = self.embeddings[
                     x_batch
                 ]  # (minibatch_size, block_size, embedding_dim)
-                logits = torch.tanh(
+                hidden = torch.tanh(
                     emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
                 )  # (minibatch_size, weights[0].shape[1])
-                for w, b in zip(self.weights[1:], self.biases[1:]):
-                    logits = logits @ w + b  # (minibatch_size, w.shape[1])
+                for w, b in zip(self.weights[1:-1], self.biases[1:-1]):
+                    hidden = torch.tanh(hidden @ w + b)  # (minibatch_size, w.shape[1])
+                logits = (
+                    hidden @ self.weights[-1] + self.biases[-1]
+                )  # (minibatch_size, CHARS)
                 loss = F.cross_entropy(logits, y_batch)
                 # Regularization
                 for w in self.weights:
@@ -261,11 +264,12 @@ class MLP:
 
         with torch.no_grad():
             emb = self.embeddings[x]  # (x.shape[0], block_size, embedding_dim)
-            logits = torch.tanh(
+            hidden = torch.tanh(
                 emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
             )  # (x.shape[0], weights[0].shape[1])
-            for w, b in zip(self.weights[1:], self.biases[1:]):
-                logits = logits @ w + b  # (x.shape[0], w.shape[1])
+            for w, b in zip(self.weights[1:-1], self.biases[1:-1]):
+                hidden = torch.tanh(hidden @ w + b)  # (x.shape[0], w.shape[1])
+            logits = hidden @ self.weights[-1] + self.biases[-1]  # (x.shape[0], CHARS)
             loss = F.cross_entropy(logits, y)
 
         return loss.item()
@@ -286,11 +290,12 @@ class MLP:
                 emb = self.embeddings[
                     torch.tensor([context])
                 ]  # (1, block_size, embedding_dim)
-                logits = torch.tanh(
+                hidden = torch.tanh(
                     emb.view(1, -1) @ self.weights[0] + self.biases[0]
                 )  # (1, weights[0].shape[1])
-                for w, b in zip(self.weights[1:], self.biases[1:]):
-                    logits = logits @ w + b  # (1, w.shape[1])
+                for w, b in zip(self.weights[1:-1], self.biases[1:-1]):
+                    hidden = torch.tanh(hidden @ w + b)  # (1, w.shape[1])
+                logits = hidden @ self.weights[-1] + self.biases[-1]  # (1, CHARS)
                 probs = F.softmax(logits, dim=1)  # (1, CHARS)
 
                 ix = torch.multinomial(probs, num_samples=1).item()
