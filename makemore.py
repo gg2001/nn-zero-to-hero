@@ -83,7 +83,7 @@ class NGram:
         learning_rate: float = 50,
         debug: bool = True,
     ):
-        xs, ys = self.parse_words(words, self.n)
+        xs, ys = self.parse_words(words)
 
         for i in range(epochs):
             # Forward pass
@@ -108,7 +108,7 @@ class NGram:
             self.weights.data += -learning_rate * self.weights.grad
 
     def evaluate(self, words: list[str]) -> float:
-        xs, ys = self.parse_words(words, self.n)
+        xs, ys = self.parse_words(words)
 
         with torch.no_grad():
             xenc = F.one_hot(xs, num_classes=CHARS).float()
