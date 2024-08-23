@@ -212,13 +212,14 @@ class MLP:
         x, y = self.parse_words(words)
         n = x.shape[0]
 
-        training_losses = []
+        training_losses: list[float] = []
         for i in range(epochs):
             # Shuffle the data
             permutation = torch.randperm(n)
             x_shuffled = x[permutation]
             y_shuffled = y[permutation]
 
+            epoch_losses: list[float] = []
             for k in range(0, n, minibatch_size):
                 # Create the minibatches
                 x_batch = x_shuffled[k : k + minibatch_size]
@@ -250,9 +251,12 @@ class MLP:
                 for p in self.parameters:
                     p.data += -learning_rate * p.grad
 
-            training_losses.append(loss.item())
+                epoch_losses.append(loss.item())
+
+            epoch_loss = sum(epoch_losses) / len(epoch_losses)
+            training_losses.append(epoch_loss)
             if debug:
-                print(f"Epoch {i} Loss: {loss.item()}")
+                print(f"Epoch {i} Loss: {epoch_loss}")
 
             # Reduce the learning rate on each quarter
             if i > 0 and i % (epochs // 4) == 0:
