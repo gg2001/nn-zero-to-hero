@@ -226,6 +226,20 @@ class MLP:
             for p in self.parameters:
                 p.data += -lr * p.grad
 
+    def evaluate(self, words: list[str]) -> float:
+        x, y = self.parse_words(words)
+
+        with torch.no_grad():
+            emb = self.embeddings[x]  # (x.shape[0], block_size, embedding_dim)
+            logits = torch.tanh(
+                emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
+            )  # (x.shape[0], weights[0].shape[1])
+            for w, b in zip(self.weights[1:], self.biases[1:]):
+                logits = logits @ w + b  # (x.shape[0], w.shape[1])
+            loss = F.cross_entropy(logits, y)
+
+        return loss.item()
+
     def forward(self, x: str = "") -> str:
         context = [0] * self.block_size
         for c in x:
@@ -264,3 +278,5 @@ if __name__ == "__main__":
     mlp.train(train_words)
     for _ in range(50):
         print(mlp.forward())
+    print(mlp.evaluate(dev_words))
+    print(mlp.evaluate(test_words))
