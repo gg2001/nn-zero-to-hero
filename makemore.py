@@ -53,22 +53,6 @@ def load_words(filename: str = "names.txt") -> tuple[list[str], list[str], list[
     return train_words, dev_words, test_words
 
 
-def parse_words(words: list[str], n: int) -> tuple[torch.Tensor, torch.Tensor]:
-    xs, ys = [], []
-    for w in words:
-        if len(w) < n:
-            continue
-        chs = ["."] + list(w) + ["."]
-        for i in range(len(chs) - n + 1):
-            context = chs[i : i + n - 1]
-            target = chs[i + n - 1]
-            xs.append([stoi[ch] for ch in context])
-            ys.append(stoi[target])
-    xs = torch.tensor(xs)
-    ys = torch.tensor(ys)
-    return xs, ys
-
-
 class NGram:
     def __init__(self, n: int):
         if n < 2:
@@ -76,6 +60,20 @@ class NGram:
 
         self.n = n
         self.weights = torch.randn((CHARS * (n - 1), CHARS), requires_grad=True)
+
+    def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        xs, ys = [], []
+        for w in words:
+            if len(w) < self.n:
+                continue
+            chs = ["."] + list(w) + ["."]
+            for i in range(len(chs) - self.n + 1):
+                context = chs[i : i + self.n - 1]
+                target = chs[i + self.n - 1]
+                xs.append([stoi[ch] for ch in context])
+                ys.append(stoi[target])
+
+        return torch.tensor(xs), torch.tensor(ys)
 
     def train(
         self,
@@ -85,7 +83,7 @@ class NGram:
         learning_rate: float = 50,
         debug: bool = True,
     ):
-        xs, ys = parse_words(words, self.n)
+        xs, ys = self.parse_words(words, self.n)
 
         for i in range(epochs):
             # Forward pass
@@ -110,7 +108,7 @@ class NGram:
             self.weights.data += -learning_rate * self.weights.grad
 
     def evaluate(self, words: list[str]) -> float:
-        xs, ys = parse_words(words, self.n)
+        xs, ys = self.parse_words(words, self.n)
 
         with torch.no_grad():
             xenc = F.one_hot(xs, num_classes=CHARS).float()
@@ -136,26 +134,59 @@ class NGram:
         for c in context[1:]:
             word += itos[c]
 
-        while True:
-            # Forward pass
-            # Neural net input: one-hot encoding
-            xenc = F.one_hot(torch.tensor(context), num_classes=CHARS).float()
-            # Predict log-counts
-            logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
-            # Probabilities for next character
-            p = F.softmax(logits, dim=-1)
+        with torch.no_grad():
+            while True:
+                # Forward pass
+                # Neural net input: one-hot encoding
+                xenc = F.one_hot(torch.tensor(context), num_classes=CHARS).float()
+                # Predict log-counts
+                logits = xenc.view(-1, CHARS * (self.n - 1)) @ self.weights
+                # Probabilities for next character
+                p = F.softmax(logits, dim=-1)
 
-            # Sample from the distribution
-            context.pop(0)
-            context.append(torch.multinomial(p, num_samples=1, replacement=True).item())
-            if context[-1] == 0:
-                break
+                # Sample from the distribution
+                context.pop(0)
+                context.append(
+                    torch.multinomial(p, num_samples=1, replacement=True).item()
+                )
+                if context[-1] == 0:
+                    break
 
-            word += itos[context[-1]]
+                word += itos[context[-1]]
 
         return word
 
 
 class MLP:
-    def __init__(self, block_size: int = 3):
+    def __init__(self, sizes: list[int], block_size: int = 3, embedding_dim: int = 10):
         self.block_size = block_size
+        self.inputs = block_size * embedding_dim
+
+        # C
+        self.embeddings = torch.randn((CHARS, embedding_dim), requires_grad=True)
+
+        # Hidden layers
+        self.weights: list[torch.Tensor] = []
+        self.biases: list[torch.Tensor] = []
+        for i in range(len(sizes)):
+            inputs = self.inputs if i == 0 else sizes[i - 1]
+            neurons = sizes[i]
+
+            self.weights.append(torch.randn((inputs, neurons), requires_grad=True))
+            self.biases.append(torch.randn((neurons), requires_grad=True))
+
+        # Output layer
+        self.weights.append(torch.randn((sizes[-1], CHARS), requires_grad=True))
+        self.biases.append(torch.randn((CHARS), requires_grad=True))
+
+    def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        x, y = [], []
+        for w in words:
+            context = [0] * self.block_size
+            for ch in w + ".":
+                ix = stoi[ch]
+                x.append(context)
+                y.append(ix)
+                context = context[1:] + [ix]
+
+        return torch.tensor(x), torch.tensor(y)
