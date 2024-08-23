@@ -147,14 +147,11 @@ class NGram:
                 p = F.softmax(logits, dim=-1)
 
                 # Sample from the distribution
-                context.pop(0)
-                context.append(
-                    torch.multinomial(p, num_samples=1, replacement=True).item()
-                )
-                if context[-1] == 0:
+                ix = torch.multinomial(p, num_samples=1, replacement=True).item()
+                context = context[1:] + [ix]
+                if ix == 0:
                     break
-
-                word += itos[context[-1]]
+                word += itos[ix]
 
         return word
 
@@ -234,11 +231,36 @@ class MLP:
         for c in x:
             ix = stoi[c]
             context = context[1:] + [ix]
-        return context
+
+        word = ""
+        for c in context:
+            if c != 0:
+                word += itos[c]
+
+        with torch.no_grad():
+            while True:
+                emb = self.embeddings[
+                    torch.tensor([context])
+                ]  # (1, block_size, embedding_dim)
+                logits = torch.tanh(
+                    emb.view(1, -1) @ self.weights[0] + self.biases[0]
+                )  # (1, weights[0].shape[1])
+                for w, b in zip(self.weights[1:], self.biases[1:]):
+                    logits = logits @ w + b  # (1, w.shape[1])
+                probs = F.softmax(logits, dim=1)  # (1, CHARS)
+
+                ix = torch.multinomial(probs, num_samples=1).item()
+                context = context[1:] + [ix]
+                if ix == 0:
+                    break
+                word += itos[ix]
+
+        return word
 
 
 if __name__ == "__main__":
     train_words, dev_words, test_words = load_words()
     mlp = MLP([20, 10])
-    print(mlp.forward("a"))
-    print(NGram(2).forward())
+    mlp.train(train_words)
+    for _ in range(50):
+        print(mlp.forward())
