@@ -118,21 +118,23 @@ class NGram:
         return loss.item()
 
     def forward(self, x: str = "") -> str:
-        context = [0]
-
+        context = []
         for c in x:
             if len(context) == self.n - 1:
                 break
-            if c not in stoi:
-                raise ValueError(f"Character {c} not in stoi")
+            if c == ".":
+                raise ValueError("Context cannot contain '.'")
             context.append(stoi[c])
 
+        if len(context) == 0:
+            context = [0]
         while len(context) < self.n - 1:
             context.append(random.randint(1, 26))
 
         word = ""
-        for c in context[1:]:
-            word += itos[c]
+        for c in context:
+            if c != 0:
+                word += itos[c]
 
         with torch.no_grad():
             while True:
@@ -179,6 +181,8 @@ class MLP:
         self.weights.append(torch.randn((sizes[-1], CHARS), requires_grad=True))
         self.biases.append(torch.randn((CHARS), requires_grad=True))
 
+        self.parameters = [self.embeddings] + self.weights + self.biases
+
     def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         x, y = [], []
         for w in words:
@@ -190,3 +194,51 @@ class MLP:
                 context = context[1:] + [ix]
 
         return torch.tensor(x), torch.tensor(y)
+
+    def train(
+        self,
+        words: list[str],
+        minibatch_size: int = 32,
+        debug: bool = True,
+    ):
+        x, y = self.parse_words(words)
+
+        for i in range(200000):
+            # Minibatch construct
+            ix = torch.randint(0, x.shape[0], (minibatch_size,))
+
+            # Forward pass
+            emb = self.embeddings[x[ix]]  # (minibatch_size, block_size, embedding_dim)
+            logits = torch.tanh(
+                emb.view(-1, self.inputs) @ self.weights[0] + self.biases[0]
+            )  # (minibatch_size, weights[0].shape[1])
+            for w, b in zip(self.weights[1:], self.biases[1:]):
+                logits = logits @ w + b  # (minibatch_size, w.shape[1])
+            loss = F.cross_entropy(logits, y[ix])
+
+            if i % 1000 == 0:
+                print(f"Epoch {i} Loss: {loss.item()}")
+
+            # Backward pass
+            for p in self.parameters:
+                p.grad = None
+            loss.backward()
+
+            # Update
+            lr = 0.1 if i < 100000 else 0.01
+            for p in self.parameters:
+                p.data += -lr * p.grad
+
+    def forward(self, x: str = "") -> str:
+        context = [0] * self.block_size
+        for c in x:
+            ix = stoi[c]
+            context = context[1:] + [ix]
+        return context
+
+
+if __name__ == "__main__":
+    train_words, dev_words, test_words = load_words()
+    mlp = MLP([20, 10])
+    print(mlp.forward("a"))
+    print(NGram(2).forward())
