@@ -764,7 +764,7 @@ class PytorchifiedBatchNorm:
 
         return ud
 
-    def evaluate(self, words: list[str]) -> float:
+    def evaluate(self, words: list[str], batchnorm: bool = True) -> float:
         x, y = self.parse_words(words)
 
         for layer in self.layers:
@@ -777,8 +777,44 @@ class PytorchifiedBatchNorm:
                 emb.shape[0], -1
             )  # (x.shape[0], block_size * embedding_dim)
 
-            for layer in self.layers:
-                x_out = layer(x_out)
+            for i, layer in enumerate(self.layers):
+                if batchnorm:
+                    x_out = layer(x_out)
+                else:
+                    if (
+                        i + 1 < len(self.layers)
+                        and isinstance(layer, Linear)
+                        and isinstance(self.layers[i + 1], BatchNorm1d)
+                    ):
+                        bn_layer: BatchNorm1d = self.layers[i + 1]
+                        folded_layer = Linear(
+                            layer.weights.shape[0], layer.weights.shape[1], bias=True
+                        )
+
+                        folded_layer.weights = layer.weights * (
+                            bn_layer.gamma
+                            / torch.sqrt(bn_layer.running_var + bn_layer.eps)
+                        )
+                        if layer.biases is not None:
+                            folded_layer.biases = (
+                                layer.biases - bn_layer.running_mean
+                            ) * (
+                                bn_layer.gamma
+                                / torch.sqrt(bn_layer.running_var + bn_layer.eps)
+                            ) + bn_layer.beta
+                        else:
+                            folded_layer.biases = (
+                                -bn_layer.running_mean
+                                * (
+                                    bn_layer.gamma
+                                    / torch.sqrt(bn_layer.running_var + bn_layer.eps)
+                                )
+                                + bn_layer.beta
+                            )
+
+                        x_out = folded_layer(x_out)
+                    elif isinstance(layer, Tanh):
+                        x_out = layer(x_out)
 
             loss = F.cross_entropy(x_out, y)
 
