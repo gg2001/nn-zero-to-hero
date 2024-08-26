@@ -309,3 +309,52 @@ class MLP:
                 word += itos[ix]
 
         return word
+
+
+class BatchNorm:
+    def __init__(
+        self,
+        sizes: list[int],
+        block_size: int = 3,
+        embedding_dim: int = 10,
+        weight_scale: float = 0.01,
+    ):
+        self.block_size = block_size
+        self.inputs = block_size * embedding_dim
+
+        # C
+        self.embeddings = torch.randn((CHARS, embedding_dim))
+
+        # Hidden layers
+        self.weights: list[torch.Tensor] = []
+        self.biases: list[torch.Tensor | None] = []
+        self.gamma: list[torch.Tensor] = []
+        self.beta = list[torch.Tensor] = []
+        self.mean = list[torch.Tensor] = []
+        self.std = list[torch.Tensor] = []
+        for i in range(len(sizes)):
+            inputs = self.inputs if i == 0 else sizes[i - 1]
+            neurons = sizes[i]
+
+            self.weights.append(
+                torch.randn((inputs, neurons)) * ((5 / 3) / (inputs**0.5))
+            )
+            self.biases.append(None)
+            self.gamma.append(torch.ones((1, neurons)))
+            self.beta.append(torch.zeros((1, neurons)))
+            self.mean.append(torch.zeros((1, neurons)))
+            self.std.append(torch.zeros((1, neurons)))
+
+        # Output layer
+        self.weights.append(torch.randn((sizes[-1], CHARS)) * weight_scale)
+        self.biases.append(torch.randn((CHARS)) * weight_scale)
+
+        self.parameters = (
+            [self.embeddings]
+            + self.weights
+            + [bias for bias in self.biases if bias is not None]
+            + self.gamma
+            + self.beta
+        )
+        for p in self.parameters:
+            p.requires_grad = True
