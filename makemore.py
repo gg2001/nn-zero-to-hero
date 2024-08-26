@@ -697,9 +697,10 @@ class PytorchifiedBatchNorm:
         epochs: int = 40,
         learning_rate: float = 0.1,
         debug: bool = True,
-    ):
+    ) -> list[list[float]]:
         x, y = self.parse_words(words)
         n = x.shape[0]
+        ud: list[list[float]] = []
 
         for layer in self.layers:
             layer.training = True
@@ -741,6 +742,15 @@ class PytorchifiedBatchNorm:
                     p.data += -learning_rate * p.grad
 
                 epoch_losses.append(loss.item())
+                with torch.no_grad():
+                    ud.append(
+                        [
+                            ((learning_rate * p.grad).std() / p.data.std())
+                            .log10()
+                            .item()
+                            for p in self.parameters
+                        ]
+                    )
 
             epoch_loss = sum(epoch_losses) / len(epoch_losses)
             training_losses.append(epoch_loss)
@@ -751,6 +761,8 @@ class PytorchifiedBatchNorm:
             if i > 0 and i % (epochs // 2) == 0:
                 learning_rate /= 10
                 print(f"Learning rate reduced to {learning_rate}")
+
+        return ud
 
     def evaluate(self, words: list[str]) -> float:
         x, y = self.parse_words(words)
