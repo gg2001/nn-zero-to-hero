@@ -318,9 +318,11 @@ class BatchNorm:
         block_size: int = 3,
         embedding_dim: int = 10,
         weight_scale: float = 0.01,
+        eps: float = 1.0e-5,
     ):
         self.block_size = block_size
         self.inputs = block_size * embedding_dim
+        self.eps = eps
 
         # C
         self.embeddings = torch.randn((CHARS, embedding_dim))
@@ -417,7 +419,7 @@ class BatchNorm:
                     bnmean = hpreact.mean(0, keepdim=True)  # (1, w.shape[1])
                     bnstd = hpreact.std(0, keepdim=True)  # (1, w.shape[1])
                     hpreact = (
-                        gamma * (hpreact - bnmean) / bnstd + beta
+                        gamma * (hpreact - bnmean) / torch.sqrt(bnstd + self.eps) + beta
                     )  # (minibatch_size, w.shape[1])
 
                     # Keep track of the running batchnorm mean and std for inference
@@ -479,7 +481,10 @@ class BatchNorm:
 
                 # Batch normalization
                 hpreact = (
-                    gamma * (hpreact - self.mean[layer]) / self.std[layer] + beta
+                    gamma
+                    * (hpreact - self.mean[layer])
+                    / torch.sqrt(self.std[layer] + self.eps)
+                    + beta
                 )  # (x.shape[0], w.shape[1])
 
                 # Activation function
@@ -524,7 +529,10 @@ class BatchNorm:
 
                     # Batch normalization
                     hpreact = (
-                        gamma * (hpreact - self.mean[layer]) / self.std[layer] + beta
+                        gamma
+                        * (hpreact - self.mean[layer])
+                        / torch.sqrt(self.std[layer] + self.eps)
+                        + beta
                     )  # (1, w.shape[1])
 
                     # Activation function
@@ -628,6 +636,10 @@ class PytorchifiedBatchNorm:
         sizes: list[int] = [200, 200, 200, 200, 200],
         block_size: int = 3,
         embedding_dim: int = 10,
+        gain: float = 5 / 3,
+        weight_scale: float = 0.1,
+        batchnorm: bool = True,
+        activation: bool = True,
     ):
         self.block_size = block_size
         self.inputs = block_size * embedding_dim
@@ -640,13 +652,25 @@ class PytorchifiedBatchNorm:
             inputs = self.inputs if i == 0 else sizes[i - 1]
             neurons = sizes[i]
 
-            self.layers.append(Linear(inputs, neurons))
-            self.layers.append(BatchNorm1d(neurons))
-            self.layers.append(Tanh())
+            layer = Linear(inputs, neurons, bias=not batchnorm)
+            with torch.no_grad():
+                layer.weights *= gain
+            self.layers.append(layer)
+
+            if batchnorm:
+                self.layers.append(BatchNorm1d(neurons))
+
+            if activation:
+                self.layers.append(Tanh())
 
         # Output layer
-        self.layers.append(Linear(sizes[-1], CHARS))
-        self.layers.append(BatchNorm1d(CHARS))
+        layer = Linear(sizes[-1], CHARS, bias=not batchnorm)
+        with torch.no_grad():
+            layer.weights *= weight_scale
+        self.layers.append(layer)
+
+        if batchnorm:
+            self.layers.append(BatchNorm1d(CHARS))
 
         self.parameters = [self.embeddings] + [
             p for layer in self.layers for p in layer.parameters()
