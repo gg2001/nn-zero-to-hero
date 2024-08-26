@@ -258,8 +258,8 @@ class MLP:
             if debug:
                 print(f"Epoch {i} Loss: {epoch_loss}")
 
-            # Reduce the learning rate on each quarter
-            if i > 0 and i % (epochs // 4) == 0:
+            # Reduce the learning rate after half
+            if i > 0 and i % (epochs // 2) == 0:
                 learning_rate /= 10
                 print(f"Learning rate reduced to {learning_rate}")
 
@@ -329,9 +329,9 @@ class BatchNorm:
         self.weights: list[torch.Tensor] = []
         self.biases: list[torch.Tensor | None] = []
         self.gamma: list[torch.Tensor] = []
-        self.beta = list[torch.Tensor] = []
-        self.mean = list[torch.Tensor] = []
-        self.std = list[torch.Tensor] = []
+        self.beta: list[torch.Tensor] = []
+        self.mean: list[torch.Tensor] = []
+        self.std: list[torch.Tensor] = []
         for i in range(len(sizes)):
             inputs = self.inputs if i == 0 else sizes[i - 1]
             neurons = sizes[i]
@@ -358,3 +358,147 @@ class BatchNorm:
         )
         for p in self.parameters:
             p.requires_grad = True
+
+    def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        x, y = [], []
+        for w in words:
+            context = [0] * self.block_size
+            for ch in w + ".":
+                ix = stoi[ch]
+                x.append(context)
+                y.append(ix)
+                context = context[1:] + [ix]
+
+        return torch.tensor(x), torch.tensor(y)
+
+    def train(
+        self,
+        words: list[str],
+        minibatch_size: int = 32,
+        epochs: int = 40,
+        momentum: float = 0.001,
+        learning_rate: float = 0.1,
+        debug: bool = True,
+    ):
+        x, y = self.parse_words(words)
+        n = x.shape[0]
+
+        training_losses: list[float] = []
+        for i in range(epochs):
+            # Shuffle the data
+            permutation = torch.randperm(n)
+            x_shuffled = x[permutation]
+            y_shuffled = y[permutation]
+
+            epoch_losses: list[float] = []
+            for k in range(0, n, minibatch_size):
+                # Create the minibatches
+                x_batch = x_shuffled[k : k + minibatch_size]
+                y_batch = y_shuffled[k : k + minibatch_size]
+
+                # Forward pass
+                emb = self.embeddings[
+                    x_batch
+                ]  # (minibatch_size, block_size, embedding_dim)
+                hpreact = emb.view(
+                    emb.shape[0], -1
+                )  # embcat = (minibatch_size, block_size * embedding_dim)
+
+                # Hidden layers
+                for layer, (w, b, gamma, beta) in enumerate(
+                    zip(self.weights[:-1], self.biases[:-1], self.gamma, self.beta)
+                ):
+                    # Linear layer
+                    hpreact = hpreact @ w  # (minibatch_size, w.shape[1])
+                    if b is not None:
+                        hpreact += b  # (minibatch_size, b.shape[0])
+
+                    # Batch normalization
+                    bnmean = hpreact.mean(0, keepdim=True)  # (1, w.shape[1])
+                    bnstd = hpreact.std(0, keepdim=True)  # (1, w.shape[1])
+                    hpreact = (
+                        gamma * (hpreact - bnmean) / bnstd + beta
+                    )  # (minibatch_size, w.shape[1])
+
+                    # Keep track of the running batchnorm mean and std for inference
+                    with torch.no_grad():
+                        self.mean[layer] = (1 - momentum) * self.mean[
+                            layer
+                        ] + momentum * bnmean  # (1, w.shape[1])
+                        self.std[layer] = (1 - momentum) * self.std[
+                            layer
+                        ] + momentum * bnstd  # (1, w.shape[1])
+
+                    # Activation function
+                    hpreact = torch.tanh(hpreact)  # (minibatch_size, w.shape[1])
+
+                # Output layer
+                logits = hpreact @ self.weights[-1]  # (minibatch_size, CHARS)
+                if self.biases[-1] is not None:
+                    logits += self.biases[-1]  # (minibatch_size, CHARS)
+                loss = F.cross_entropy(logits, y_batch)
+
+                # Backward pass
+                for p in self.parameters:
+                    p.grad = None
+                loss.backward()
+
+                # Update
+                for p in self.parameters:
+                    p.data += -learning_rate * p.grad
+
+                epoch_losses.append(loss.item())
+
+            epoch_loss = sum(epoch_losses) / len(epoch_losses)
+            training_losses.append(epoch_loss)
+            if debug:
+                print(f"Epoch {i} Loss: {epoch_loss}")
+
+            # Reduce the learning rate after half
+            if i > 0 and i % (epochs // 2) == 0:
+                learning_rate /= 10
+                print(f"Learning rate reduced to {learning_rate}")
+
+    def evaluate(self, words: list[str]) -> float:
+        x, y = self.parse_words(words)
+
+        with torch.no_grad():
+            emb = self.embeddings[x]  # (x.shape[0], block_size, embedding_dim)
+            hpreact = emb.view(
+                emb.shape[0], -1
+            )  # embcat = (x.shape[0], block_size * embedding_dim)
+
+            # Hidden layers
+            for layer, (w, b, gamma, beta) in enumerate(
+                zip(self.weights[:-1], self.biases[:-1], self.gamma, self.beta)
+            ):
+                # Linear layer
+                hpreact = hpreact @ w  # (minibatch_size, w.shape[1])
+                if b is not None:
+                    hpreact += b  # (minibatch_size, b.shape[0])
+
+                # Batch normalization
+                hpreact = (
+                    gamma * (hpreact - self.mean[layer]) / self.std[layer] + beta
+                )  # (x.shape[0], w.shape[1])
+
+                # Activation function
+                hpreact = torch.tanh(hpreact)  # (x.shape[0], w.shape[1])
+
+            # Output layer
+            logits = hpreact @ self.weights[-1]  # (minibatch_size, CHARS)
+            if self.biases[-1] is not None:
+                logits += self.biases[-1]  # (minibatch_size, CHARS)
+            loss = F.cross_entropy(logits, y)
+
+        return loss.item()
+
+
+if __name__ == "__main__":
+    train_words, dev_words, test_words = load_words()
+
+    model = BatchNorm(sizes=[200])
+    model.train(train_words)
+
+    print(model.evaluate(dev_words))
+    print(model.evaluate(test_words))
