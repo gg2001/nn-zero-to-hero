@@ -543,3 +543,241 @@ class BatchNorm:
                 word += itos[ix]
 
         return word
+
+
+class PytorchifiedModule:
+    def __init__(self):
+        self.training: bool = True
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+    def parameters(self) -> list[torch.Tensor]:
+        pass
+
+
+class Linear(PytorchifiedModule):
+    def __init__(self, fan_in: int, fan_out: int, bias: bool = True):
+        super().__init__()
+        self.weights: torch.Tensor = torch.randn((fan_in, fan_out)) / (fan_in**0.5)
+        self.biases: torch.Tensor = torch.zeros((fan_out)) if bias else None
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        self.out = x @ self.weights
+        if self.biases is not None:
+            self.out += self.biases
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [self.weights] + ([self.biases] if self.biases is not None else [])
+
+
+class BatchNorm1d(PytorchifiedModule):
+    def __init__(self, dim: int, eps: float = 1.0e-5, momentum: float = 0.1):
+        super().__init__()
+        self.eps = eps
+        self.momentum = momentum
+        # Parameters (trained with backprop)
+        self.gamma: torch.Tensor = torch.ones(dim)
+        self.beta: torch.Tensor = torch.zeros(dim)
+        # Buffers (trained with a running momentum update)
+        self.running_mean: torch.Tensor = torch.zeros(dim)
+        self.running_var: torch.Tensor = torch.ones(dim)
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        # Forward pass
+        if self.training:
+            xmean = x.mean(0, keepdim=True)  # Batch mean
+            xvar = x.var(0, keepdim=True)  # Batch variance
+        else:
+            xmean = self.running_mean
+            xvar = self.running_var
+        xhat = (x - xmean) / torch.sqrt(xvar + self.eps)
+
+        self.out = self.gamma * xhat + self.beta
+
+        # Update the buffers
+        if self.training:
+            with torch.no_grad():
+                self.running_mean = (
+                    1 - self.momentum
+                ) * self.running_mean + self.momentum * xmean
+                self.running_var = (
+                    1 - self.momentum
+                ) * self.running_var + self.momentum * xvar
+
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [self.gamma, self.beta]
+
+
+class Tanh(PytorchifiedModule):
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        super().__init__()
+        self.out = torch.tanh(x)
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return []
+
+
+class PytorchifiedBatchNorm:
+    def __init__(
+        self,
+        sizes: list[int] = [200, 200, 200, 200, 200],
+        block_size: int = 3,
+        embedding_dim: int = 10,
+    ):
+        self.block_size = block_size
+        self.inputs = block_size * embedding_dim
+
+        self.embeddings = torch.randn((CHARS, embedding_dim))
+        self.layers: list[PytorchifiedModule] = []
+
+        # Hidden layers
+        for i in range(len(sizes)):
+            inputs = self.inputs if i == 0 else sizes[i - 1]
+            neurons = sizes[i]
+
+            self.layers.append(Linear(inputs, neurons))
+            self.layers.append(BatchNorm1d(neurons))
+            self.layers.append(Tanh())
+
+        # Output layer
+        self.layers.append(Linear(sizes[-1], CHARS))
+        self.layers.append(BatchNorm1d(CHARS))
+
+        self.parameters = [self.embeddings] + [
+            p for layer in self.layers for p in layer.parameters()
+        ]
+        for p in self.parameters:
+            p.requires_grad = True
+
+    def parse_words(self, words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        x, y = [], []
+        for w in words:
+            context = [0] * self.block_size
+            for ch in w + ".":
+                ix = stoi[ch]
+                x.append(context)
+                y.append(ix)
+                context = context[1:] + [ix]
+
+        return torch.tensor(x), torch.tensor(y)
+
+    def train(
+        self,
+        words: list[str],
+        minibatch_size: int = 32,
+        epochs: int = 40,
+        learning_rate: float = 0.1,
+        debug: bool = True,
+    ):
+        x, y = self.parse_words(words)
+        n = x.shape[0]
+
+        for layer in self.layers:
+            layer.training = True
+
+        training_losses: list[float] = []
+        for i in range(epochs):
+            # Shuffle the data
+            permutation = torch.randperm(n)
+            x_shuffled = x[permutation]
+            y_shuffled = y[permutation]
+
+            epoch_losses: list[float] = []
+            for k in range(0, n, minibatch_size):
+                # Create the minibatches
+                x_batch = x_shuffled[k : k + minibatch_size]
+                y_batch = y_shuffled[k : k + minibatch_size]
+
+                # Forward pass
+                emb = self.embeddings[
+                    x_batch
+                ]  # (minibatch_size, block_size, embedding_dim)
+                x_out = emb.view(
+                    emb.shape[0], -1
+                )  # (minibatch_size, block_size * embedding_dim)
+                for layer in self.layers:
+                    x_out = layer(x_out)
+                loss = F.cross_entropy(x_out, y_batch)
+
+                # Backward pass
+                if debug:
+                    for layer in self.layers:
+                        layer.out.retain_grad()
+                for p in self.parameters:
+                    p.grad = None
+                loss.backward()
+
+                # Update
+                for p in self.parameters:
+                    p.data += -learning_rate * p.grad
+
+                epoch_losses.append(loss.item())
+
+            epoch_loss = sum(epoch_losses) / len(epoch_losses)
+            training_losses.append(epoch_loss)
+            if debug:
+                print(f"Epoch {i} Loss: {epoch_loss}")
+
+            # Reduce the learning rate after half
+            if i > 0 and i % (epochs // 2) == 0:
+                learning_rate /= 10
+                print(f"Learning rate reduced to {learning_rate}")
+
+    def evaluate(self, words: list[str]) -> float:
+        x, y = self.parse_words(words)
+
+        for layer in self.layers:
+            layer.training = False
+
+        with torch.no_grad():
+            # Forward pass
+            emb = self.embeddings[x]  # (x.shape[0], block_size, embedding_dim)
+            x_out = emb.view(
+                emb.shape[0], -1
+            )  # (x.shape[0], block_size * embedding_dim)
+
+            for layer in self.layers:
+                x_out = layer(x_out)
+
+            loss = F.cross_entropy(x_out, y)
+
+        return loss.item()
+
+    def forward(self, x: str = "") -> str:
+        context = [0] * self.block_size
+        for c in x:
+            ix = stoi[c]
+            context = context[1:] + [ix]
+
+        word = ""
+        for c in context:
+            if c != 0:
+                word += itos[c]
+
+        for layer in self.layers:
+            layer.training = False
+
+        with torch.no_grad():
+            while True:
+                emb = self.embeddings[
+                    torch.tensor([context])
+                ]  # (1, block_size, embedding_dim)
+                x_out = emb.view(emb.shape[0], -1)  # (1, block_size * embedding_dim)
+
+                for layer in self.layers:
+                    x_out = layer(x_out)
+
+                probs = F.softmax(x_out, dim=1)  # (1, CHARS)
+
+                ix = torch.multinomial(probs, num_samples=1).item()
+                context = context[1:] + [ix]
+                if ix == 0:
+                    break
+                word += itos[ix]
+
+        return word
