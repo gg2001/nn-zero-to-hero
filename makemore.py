@@ -473,9 +473,9 @@ class BatchNorm:
                 zip(self.weights[:-1], self.biases[:-1], self.gamma, self.beta)
             ):
                 # Linear layer
-                hpreact = hpreact @ w  # (minibatch_size, w.shape[1])
+                hpreact = hpreact @ w  # (x.shape[0], w.shape[1])
                 if b is not None:
-                    hpreact += b  # (minibatch_size, b.shape[0])
+                    hpreact += b  # (x.shape[0], b.shape[0])
 
                 # Batch normalization
                 hpreact = (
@@ -486,19 +486,60 @@ class BatchNorm:
                 hpreact = torch.tanh(hpreact)  # (x.shape[0], w.shape[1])
 
             # Output layer
-            logits = hpreact @ self.weights[-1]  # (minibatch_size, CHARS)
+            logits = hpreact @ self.weights[-1]  # (x.shape[0], CHARS)
             if self.biases[-1] is not None:
-                logits += self.biases[-1]  # (minibatch_size, CHARS)
+                logits += self.biases[-1]  # (x.shape[0], CHARS)
             loss = F.cross_entropy(logits, y)
 
         return loss.item()
 
+    def forward(self, x: str = "") -> str:
+        context = [0] * self.block_size
+        for c in x:
+            ix = stoi[c]
+            context = context[1:] + [ix]
 
-if __name__ == "__main__":
-    train_words, dev_words, test_words = load_words()
+        word = ""
+        for c in context:
+            if c != 0:
+                word += itos[c]
 
-    model = BatchNorm(sizes=[200])
-    model.train(train_words)
+        with torch.no_grad():
+            while True:
+                emb = self.embeddings[
+                    torch.tensor([context])
+                ]  # (1, block_size, embedding_dim)
+                hpreact = emb.view(
+                    emb.shape[0], -1
+                )  # embcat = (1, block_size * embedding_dim)
 
-    print(model.evaluate(dev_words))
-    print(model.evaluate(test_words))
+                # Hidden layers
+                for layer, (w, b, gamma, beta) in enumerate(
+                    zip(self.weights[:-1], self.biases[:-1], self.gamma, self.beta)
+                ):
+                    # Linear layer
+                    hpreact = hpreact @ w  # (1, w.shape[1])
+                    if b is not None:
+                        hpreact += b  # (1, b.shape[0])
+
+                    # Batch normalization
+                    hpreact = (
+                        gamma * (hpreact - self.mean[layer]) / self.std[layer] + beta
+                    )  # (1, w.shape[1])
+
+                    # Activation function
+                    hpreact = torch.tanh(hpreact)  # (1, w.shape[1])
+
+                # Output layer
+                logits = hpreact @ self.weights[-1]  # (1, CHARS)
+                if self.biases[-1] is not None:
+                    logits += self.biases[-1]  # (1, CHARS)
+                probs = F.softmax(logits, dim=1)  # (1, CHARS)
+
+                ix = torch.multinomial(probs, num_samples=1).item()
+                context = context[1:] + [ix]
+                if ix == 0:
+                    break
+                word += itos[ix]
+
+        return word
