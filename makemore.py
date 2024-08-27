@@ -630,6 +630,31 @@ class Tanh(PytorchifiedModule):
         return []
 
 
+class Embedding(PytorchifiedModule):
+    def __init__(self, num_embeddings: int, embedding_dim: int):
+        super().__init__()
+        self.weights: torch.Tensor = torch.randn((num_embeddings, embedding_dim))
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        self.out = self.weights[x]
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [self.weights]
+
+
+class Flatten(PytorchifiedModule):
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        self.out = x.view(x.shape[0], -1)
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return []
+
+
 class PytorchifiedBatchNorm:
     def __init__(
         self,
@@ -645,8 +670,10 @@ class PytorchifiedBatchNorm:
         self.block_size = block_size
         self.inputs = block_size * embedding_dim
 
-        self.embeddings = torch.randn((CHARS, embedding_dim))
-        self.layers: list[PytorchifiedModule] = []
+        self.layers: list[PytorchifiedModule] = [
+            Embedding(CHARS, embedding_dim),
+            Flatten(),
+        ]
 
         # Hidden layers
         for i in range(len(sizes)):
@@ -673,9 +700,7 @@ class PytorchifiedBatchNorm:
         if batchnorm and batchnorm_output:
             self.layers.append(BatchNorm1d(CHARS))
 
-        self.parameters = [self.embeddings] + [
-            p for layer in self.layers for p in layer.parameters()
-        ]
+        self.parameters = [p for layer in self.layers for p in layer.parameters()]
         for p in self.parameters:
             p.requires_grad = True
 
@@ -722,12 +747,7 @@ class PytorchifiedBatchNorm:
                 y_batch = y_shuffled[k : k + minibatch_size]
 
                 # Forward pass
-                emb = self.embeddings[
-                    x_batch
-                ]  # (minibatch_size, block_size, embedding_dim)
-                x_out = emb.view(
-                    emb.shape[0], -1
-                )  # (minibatch_size, block_size * embedding_dim)
+                x_out = x_batch
                 for layer in self.layers:
                     x_out = layer(x_out)
                 loss = F.cross_entropy(x_out, y_batch)
@@ -776,16 +796,14 @@ class PytorchifiedBatchNorm:
 
         with torch.no_grad():
             # Forward pass
-            emb = self.embeddings[x]  # (x.shape[0], block_size, embedding_dim)
-            x_out = emb.view(
-                emb.shape[0], -1
-            )  # (x.shape[0], block_size * embedding_dim)
-
+            x_out = x
             for i, layer in enumerate(self.layers):
                 if batchnorm:
                     x_out = layer(x_out)
                 else:
-                    if (
+                    if isinstance(layer, BatchNorm1d):
+                        continue
+                    elif (
                         i + 1 < len(self.layers)
                         and isinstance(layer, Linear)
                         and isinstance(self.layers[i + 1], BatchNorm1d)
@@ -817,7 +835,7 @@ class PytorchifiedBatchNorm:
                             )
 
                         x_out = folded_layer(x_out)
-                    elif isinstance(layer, Tanh):
+                    else:
                         x_out = layer(x_out)
 
             loss = F.cross_entropy(x_out, y)
@@ -840,11 +858,7 @@ class PytorchifiedBatchNorm:
 
         with torch.no_grad():
             while True:
-                emb = self.embeddings[
-                    torch.tensor([context])
-                ]  # (1, block_size, embedding_dim)
-                x_out = emb.view(emb.shape[0], -1)  # (1, block_size * embedding_dim)
-
+                x_out = torch.tensor([context])
                 for layer in self.layers:
                     x_out = layer(x_out)
 
