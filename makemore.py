@@ -655,6 +655,37 @@ class Flatten(PytorchifiedModule):
         return []
 
 
+class FlattenConsecutive:
+    def __init__(self, n: int):
+        self.n = n
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        x = x.view(B, T // self.n, C * self.n)
+        if x.shape[1] == 1:
+            x = x.squeeze(1)
+        self.out = x
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return []
+
+
+class Sequential(PytorchifiedModule):
+    def __init__(self, layers: list[PytorchifiedModule]):
+        super().__init__()
+        self.layers = layers
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        for layer in self.layers:
+            x = layer(x)
+        self.out = x
+        return self.out
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [p for layer in self.layers for p in layer.parameters()]
+
+
 class PytorchifiedBatchNorm:
     def __init__(
         self,
@@ -666,19 +697,29 @@ class PytorchifiedBatchNorm:
         batchnorm: bool = True,
         batchnorm_output: bool = True,
         activation: bool = True,
+        flatten_consecutive: bool = False,
     ):
         self.block_size = block_size
         self.inputs = block_size * embedding_dim
 
         self.layers: list[PytorchifiedModule] = [
             Embedding(CHARS, embedding_dim),
-            Flatten(),
         ]
+
+        if not flatten_consecutive:
+            self.layers.append(Flatten())
 
         # Hidden layers
         for i in range(len(sizes)):
             inputs = self.inputs if i == 0 else sizes[i - 1]
             neurons = sizes[i]
+
+            if flatten_consecutive:
+                self.layers.append(FlattenConsecutive(2))
+                if i == 0:
+                    inputs = embedding_dim * 2
+                elif flatten_consecutive:
+                    inputs *= 2
 
             layer = Linear(inputs, neurons, bias=not batchnorm)
             with torch.no_grad():
