@@ -595,8 +595,11 @@ class BatchNorm1d(PytorchifiedModule):
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         # Forward pass
         if self.training:
-            xmean = x.mean(0, keepdim=True)  # Batch mean
-            xvar = x.var(0, keepdim=True)  # Batch variance
+            dim = 0
+            if x.ndim == 3:
+                dim = (0, 1)
+            xmean = x.mean(dim, keepdim=True)  # Batch mean
+            xvar = x.var(dim, keepdim=True)  # Batch variance
         else:
             xmean = self.running_mean
             xvar = self.running_var
@@ -718,8 +721,8 @@ class PytorchifiedBatchNorm:
                 self.layers.append(FlattenConsecutive(2))
                 if i == 0:
                     inputs = embedding_dim * 2
-                elif flatten_consecutive:
-                    inputs *= 2
+                else:
+                    inputs = neurons * 2
 
             layer = Linear(inputs, neurons, bias=not batchnorm)
             with torch.no_grad():
