@@ -639,6 +639,7 @@ class PytorchifiedBatchNorm:
         gain: float = 5 / 3,
         weight_scale: float = 0.1,
         batchnorm: bool = True,
+        batchnorm_output: bool = True,
         activation: bool = True,
     ):
         self.block_size = block_size
@@ -669,7 +670,7 @@ class PytorchifiedBatchNorm:
             layer.weights *= weight_scale
         self.layers.append(layer)
 
-        if batchnorm:
+        if batchnorm and batchnorm_output:
             self.layers.append(BatchNorm1d(CHARS))
 
         self.parameters = [self.embeddings] + [
@@ -697,9 +698,11 @@ class PytorchifiedBatchNorm:
         epochs: int = 40,
         learning_rate: float = 0.1,
         debug: bool = True,
-    ) -> list[list[float]]:
+    ) -> tuple[list[float], list[list[float]]]:
         x, y = self.parse_words(words)
         n = x.shape[0]
+
+        lossi: list[float] = []
         ud: list[list[float]] = []
 
         for layer in self.layers:
@@ -743,6 +746,7 @@ class PytorchifiedBatchNorm:
 
                 epoch_losses.append(loss.item())
                 with torch.no_grad():
+                    lossi.append(loss.log10().item())
                     ud.append(
                         [
                             ((learning_rate * p.grad).std() / p.data.std())
@@ -762,7 +766,7 @@ class PytorchifiedBatchNorm:
                 learning_rate /= 10
                 print(f"Learning rate reduced to {learning_rate}")
 
-        return ud
+        return lossi, ud
 
     def evaluate(self, words: list[str], batchnorm: bool = True) -> float:
         x, y = self.parse_words(words)
