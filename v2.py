@@ -148,18 +148,27 @@ class Block(nn.Module):
 
 
 class BigramLanguageModel(nn.Module):
-    def __init__(self, vocab_size: int, block_size: int, n_embd: int):
+    def __init__(
+        self,
+        vocab_size: int,
+        block_size: int,
+        n_embd: int,
+        n_head: int = 4,
+        n_layer: int = 4,
+    ):
         super().__init__()
         # Each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         # Multi-head attention
         self.blocks = nn.Sequential(
-            Block(n_embd=n_embd, n_head=4, block_size=block_size),
-            Block(n_embd=n_embd, n_head=4, block_size=block_size),
-            Block(n_embd=n_embd, n_head=4, block_size=block_size),
-            nn.LayerNorm(n_embd),
+            *[
+                Block(n_embd=n_embd, n_head=n_head, block_size=block_size)
+                for _ in range(n_layer)
+            ],
         )
+        # Layernorm
+        self.ln_f = nn.LayerNorm(n_embd)
         # Feed-forward layer
         self.ffwd = FeedForward(n_embd)
         # Decoder language model head
