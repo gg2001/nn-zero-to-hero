@@ -121,6 +121,24 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+class Block(nn.Module):
+    """Transformer block: communication followed by computation"""
+
+    def __init__(self, n_embd: int, n_head: int, block_size: int):
+        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(
+            num_heads=n_head, head_size=head_size, block_size=block_size, n_embd=n_embd
+        )
+        self.ffwd = FeedForward(n_embd=n_embd)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.sa(x)
+        x = x + self.ffwd(x)
+        return x
+
+
 class BigramLanguageModel(nn.Module):
     def __init__(self, vocab_size: int, block_size: int, n_embd: int):
         super().__init__()
@@ -128,8 +146,10 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         # Multi-head attention
-        self.sa_heads = MultiHeadAttention(
-            num_heads=4, head_size=n_embd // 4, block_size=block_size, n_embd=n_embd
+        self.blocks = nn.Sequential(
+            Block(n_embd=n_embd, n_head=4, block_size=block_size),
+            Block(n_embd=n_embd, n_head=4, block_size=block_size),
+            Block(n_embd=n_embd, n_head=4, block_size=block_size),
         )
         # Feed-forward layer
         self.ffwd = FeedForward(n_embd)
@@ -150,8 +170,7 @@ class BigramLanguageModel(nn.Module):
         x = tok_emb + pos_emb  # (B, T, C) + (T, C) -> (B, T, C)
 
         # Apply one head of self-attention
-        x = self.sa_heads(x)  # (B, T, C)
-        x = self.ffwd(x)  # (B, T, C)
+        x = self.blocks(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is None:
