@@ -104,9 +104,11 @@ class BigramLanguageModel(nn.Module):
     def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         # idx is (B, T) array of indices in the current context
         for i in range(max_new_tokens):
+            # crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
             # predict
             # (B, T, C) = batch, time, channels
-            logits, loss = self(idx)  # (idx.shape[0], i + 1, vocab_size)
+            logits, loss = self(idx_cond)  # (idx.shape[0], i + 1, vocab_size)
             # focus only on the last time step
             # becomes (B, C)
             logits = logits[:, -1, :]  # (idx.shape[0], vocab_size)
@@ -123,7 +125,7 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-model = BigramLanguageModel(vocab_size, block_size, n_embd)
+model = BigramLanguageModel(vocab_size=vocab_size, block_size=block_size, n_embd=n_embd)
 m = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
