@@ -66,16 +66,30 @@ def estimate_loss() -> dict[str, torch.Tensor]:
 
 
 class BigramLanguageModel(nn.Module):
-    def __init__(self, vocab_size: int):
+    def __init__(self, vocab_size: int, block_size: int, n_embd: int):
         super().__init__()
         # Each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(
         self, inputs: torch.Tensor, targets: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        B, T = inputs.shape
+
         # idx and targets are both (B,T) tensor of integers
-        logits = self.token_embedding_table(inputs)  # (B,T,C)
+        # (B, T, C)
+        tok_emb = self.token_embedding_table(
+            inputs
+        )  # (idx.shape[0], idx.shape[1], vocab_size)
+        # (T, C)
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=device)  # [0, 1, 2, ..., T-1]
+        )
+        # (B, T, C)
+        x = tok_emb + pos_emb
+        logits = self.lm_head(x)  # (idx.shape[0], idx.shape[1], vocab_size)
 
         if targets is None:
             loss = None
@@ -89,22 +103,27 @@ class BigramLanguageModel(nn.Module):
 
     def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         # idx is (B, T) array of indices in the current context
-        for _ in range(max_new_tokens):
+        for i in range(max_new_tokens):
             # predict
-            logits, loss = self(idx)
+            # (B, T, C) = batch, time, channels
+            logits, loss = self(idx)  # (idx.shape[0], i + 1, vocab_size)
             # focus only on the last time step
-            logits = logits[:, -1, :]  # becomes (B, C)
+            # becomes (B, C)
+            logits = logits[:, -1, :]  # (idx.shape[0], vocab_size)
             # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1)  # (B, C)
+            # (B, C)
+            probs = F.softmax(logits, dim=-1)  # (idx.shape[0], vocab_size)
             # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            # (B, 1)
+            idx_next = torch.multinomial(probs, num_samples=1)  # (idx.shape[0], 1)
             # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+            # (B, T+1)
+            idx = torch.cat((idx, idx_next), dim=1)  # (idx.shape[0], i + 2)
 
         return idx
 
 
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel(vocab_size, block_size, n_embd)
 m = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
