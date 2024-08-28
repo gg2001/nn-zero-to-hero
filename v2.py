@@ -2,14 +2,17 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-batch_size = 32
-block_size = 8
+batch_size = 64
+block_size = 256
 max_iters = 5000
 eval_interval = 500
-learning_rate = 1e-3
+learning_rate = 3e-4
 device = "cuda" if torch.cuda.is_available() else "cpu"
 eval_iters = 200
-n_embd = 32
+n_embd = 384
+n_head = 6
+n_layer = 6
+dropout = 0.2
 
 with open("input.txt", "r", encoding="utf-8") as f:
     text = f.read()
@@ -73,6 +76,7 @@ class Head(nn.Module):
         # Non-parameter
         self.tril: torch.Tensor
         self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # batch, time, channels
@@ -86,6 +90,7 @@ class Head(nn.Module):
         )  # (B, T, C) @ (B, C, T) -> (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B, T, T)
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
+        wei = self.dropout(wei)
 
         # Perform the weighted aggregation of the values
         v: torch.Tensor = self.value(x)  # (B, T, C)
@@ -106,11 +111,12 @@ class MultiHeadAttention(nn.Module):
             ]
         )
         self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Self-attention output
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 
@@ -120,7 +126,10 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd: int):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd), nn.ReLU(), nn.Linear(4 * n_embd, n_embd)
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -189,6 +198,7 @@ class BigramLanguageModel(nn.Module):
 
         # Apply one head of self-attention
         x = self.blocks(x)  # (B, T, C)
+        x = self.ln_f(x)  # (B, T, C)
         logits = self.lm_head(x)  # (B, T, vocab_size)
 
         if targets is None:
@@ -225,7 +235,13 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-model = BigramLanguageModel(vocab_size=vocab_size, block_size=block_size, n_embd=n_embd)
+model = BigramLanguageModel(
+    vocab_size=vocab_size,
+    block_size=block_size,
+    n_embd=n_embd,
+    n_head=n_head,
+    n_layer=n_layer,
+)
 m = model.to(device)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
