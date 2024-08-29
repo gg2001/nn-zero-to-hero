@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-batch_size = 64
-block_size = 256
+batch_size = 32
+block_size = 8
 max_iters = 5000
 eval_interval = 500
-learning_rate = 3e-4
+learning_rate = 1e-3
 device = "cuda" if torch.cuda.is_available() else "cpu"
 eval_iters = 200
-n_embd = 384
-n_head = 6
-n_layer = 6
+n_embd = 32  # C
+n_head = 4
+n_layer = 4
 dropout = 0.2
 
 with open("input.txt", "r", encoding="utf-8") as f:
@@ -81,8 +81,8 @@ class Head(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # batch, time, channels
         B, T, C = x.shape
-        k: torch.Tensor = self.key(x)  # (B, T, C)
-        q: torch.Tensor = self.query(x)  # (B, T, C)
+        k: torch.Tensor = self.key(x)  # (B, T, head_size = n_embd//n_head)
+        q: torch.Tensor = self.query(x)  # (B, T, head_size)
 
         # Compute attention scores ("affinities")
         wei: torch.Tensor = (
@@ -93,8 +93,8 @@ class Head(nn.Module):
         wei = self.dropout(wei)
 
         # Perform the weighted aggregation of the values
-        v: torch.Tensor = self.value(x)  # (B, T, C)
-        out = wei @ v  # (B, T, T) @ (B, T, C) -> (B, T, C)
+        v: torch.Tensor = self.value(x)  # (B, T, head_size)
+        out = wei @ v  # (B, T, T) @ (B, T, head_size) -> (B, T, head_size)
 
         return out
 
@@ -115,8 +115,11 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Self-attention output
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.dropout(self.proj(out))
+        out = torch.cat(
+            [h(x) for h in self.heads],  # [(B, T, head_size = n_embd//n_head)...]
+            dim=-1,
+        )  # (B, T, n_embd)
+        out = self.dropout(self.proj(out))  # (B, T, n_embd)
         return out
 
 
@@ -133,7 +136,7 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        return self.net(x)  # (B, T, C)
 
 
 class Block(nn.Module):
@@ -162,8 +165,8 @@ class BigramLanguageModel(nn.Module):
         vocab_size: int,
         block_size: int,
         n_embd: int,
-        n_head: int = 4,
-        n_layer: int = 4,
+        n_head: int,
+        n_layer: int,
     ):
         super().__init__()
         # Each token directly reads off the logits for the next token from a lookup table
@@ -178,8 +181,6 @@ class BigramLanguageModel(nn.Module):
         )
         # Layernorm
         self.ln_f = nn.LayerNorm(n_embd)
-        # Feed-forward layer
-        self.ffwd = FeedForward(n_embd)
         # Decoder language model head
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
@@ -192,7 +193,7 @@ class BigramLanguageModel(nn.Module):
         # idx and targets are both (B, T) tensor of integers
         tok_emb = self.token_embedding_table(idx)  # (B, T, C)
         pos_emb = self.position_embedding_table(
-            torch.arange(T, device=device)
+            torch.arange(T, device=device)  # [0, 1, 2, ..., T-1]
         )  # (T, C)
         x = tok_emb + pos_emb  # (B, T, C) + (T, C) -> (B, T, C)
 
