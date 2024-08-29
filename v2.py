@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-batch_size = 64
-block_size = 256
+batch_size = 32
+block_size = 8
 max_iters = 5000
 eval_interval = 500
-learning_rate = 3e-4
+learning_rate = 1e-3
 device = "cuda" if torch.cuda.is_available() else "cpu"
 eval_iters = 200
-n_embd = 384
-n_head = 6
-n_layer = 6
+n_embd = 32  # C
+n_head = 4
+n_layer = 4
 dropout = 0.2
 
 with open("input.txt", "r", encoding="utf-8") as f:
@@ -39,6 +39,8 @@ n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
+torch.manual_seed(1337)
+
 
 def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Generate a small batch of data of inputs x and targets y"""
@@ -65,61 +67,59 @@ def estimate_loss() -> dict[str, torch.Tensor]:
     return out
 
 
-class Head(nn.Module):
-    """Single self-attention head"""
-
-    def __init__(self, head_size: int, block_size: int, n_embd: int):
-        super().__init__()
-        self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
-        # Non-parameter
-        self.tril: torch.Tensor
-        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # batch, time, channels
-        B, T, C = x.shape
-        k: torch.Tensor = self.key(x)  # (B, T, head_size = n_embd//n_head)
-        q: torch.Tensor = self.query(x)  # (B, T, head_size)
-
-        # Compute attention scores ("affinities")
-        wei: torch.Tensor = (
-            q @ k.transpose(-2, -1) * C**-0.5  # Scaled attention
-        )  # (B, T, C) @ (B, C, T) -> (B, T, T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B, T, T)
-        wei = F.softmax(wei, dim=-1)  # (B, T, T)
-        wei = self.dropout(wei)
-
-        # Perform the weighted aggregation of the values
-        v: torch.Tensor = self.value(x)  # (B, T, head_size)
-        out = wei @ v  # (B, T, T) @ (B, T, head_size) -> (B, T, head_size)
-
-        return out
-
-
 class MultiHeadAttention(nn.Module):
     """Multiple self-attention heads"""
 
     def __init__(self, num_heads: int, head_size: int, block_size: int, n_embd: int):
         super().__init__()
-        self.heads = nn.ModuleList(
-            [
-                Head(head_size=head_size, block_size=block_size, n_embd=n_embd)
-                for _ in range(num_heads)
-            ]
-        )
+        self.n_embd = n_embd
+        self.num_heads = num_heads
+        self.head_size = head_size
+        self.heads = nn.Linear(n_embd, 3 * n_embd, bias=False)
         self.proj = nn.Linear(n_embd, n_embd)
+        # Non-parameter
+        self.tril: torch.Tensor
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
         self.dropout = nn.Dropout(dropout)
+        self.heads_dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Self-attention output
-        out = torch.cat(
-            [h(x) for h in self.heads],  # [(B, T, head_size = n_embd//n_head)...]
-            dim=-1,
+        # batch, time, channels
+        B, T, C = x.shape
+
+        # query, key, value
+        qkv: torch.Tensor = self.heads(x)  # (B, T, 3 * n_embd)
+        q, k, v = (
+            qkv[..., : self.n_embd],
+            qkv[..., self.n_embd : 2 * self.n_embd],
+            qkv[..., 2 * self.n_embd :],
         )  # (B, T, n_embd)
-        out = self.dropout(self.proj(out))  # (B, T, n_embd)
+
+        # separate the heads
+        q = q.view(B, T, self.num_heads, self.head_size).transpose(
+            1, 2
+        )  # (B, num_heads, T, head_size)
+        k = k.view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        v = v.view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+
+        # attention scores + mask
+        attn: torch.Tensor = (
+            q @ k.transpose(-2, -1)
+        ) * self.head_size**-0.5  # (batch_size, n_head, token_len, token_len)
+        attn = attn.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        attn = F.softmax(attn, dim=-1)
+        attn = self.heads_dropout(attn)
+
+        heads_output = attn @ v  # (B, num_heads, T, head_size)
+
+        # merge heads
+        concat_heads = heads_output.transpose(1, 2).reshape(
+            B, T, self.n_embd
+        )  # (B, T, n_embd)
+
+        # linear layer
+        out = self.dropout(self.proj(concat_heads))  # (B, T, n_embd)
+
         return out
 
 
